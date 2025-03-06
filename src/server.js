@@ -191,39 +191,185 @@ function formatAnalysisForDisplay(analysis) {
   try {
     console.error('⭐ Starting to format analysis...');
 
-    // Basic information
-    let response = `SEO ANALYSIS RESULTS\n\n`;
-    response += `Page Information:\n`;
-    response += `- Title: ${analysis.title || 'Missing'} (${
-      analysis.title ? analysis.title.length : 0
-    } chars)\n`;
-    response += `- Meta Description: ${
-      analysis.metaDescription || 'Missing'
-    } (${
-      analysis.metaDescription ? analysis.metaDescription.length : 0
-    } chars)\n`;
-    response += `- Headings: H1: ${analysis.headingStructure.h1}, H2: ${analysis.headingStructure.h2}, H3: ${analysis.headingStructure.h3}\n`;
-    response += `- Schema Count: ${analysis.schemaCount}\n`;
+    // Create a more structured, actionable response
+    let response = `# SEO ANALYSIS REPORT
 
-    // Issues
-    response += `\nIssues:\n`;
-    if (analysis.issues && analysis.issues.length > 0) {
-      analysis.issues.forEach((issue, i) => {
-        response += `${i + 1}. [${issue.severity}] ${issue.message}\n`;
-      });
-    } else {
-      response += `No issues found.\n`;
+## SUMMARY
+This analysis identified ${analysis.issues.length} issues with your HTML. 
+${
+  analysis.issues.filter((i) => i.severity === 'high').length > 0
+    ? `⚠️ CRITICAL: ${
+        analysis.issues.filter((i) => i.severity === 'high').length
+      } high-priority issues require immediate attention.`
+    : '✅ No critical issues found.'
+}
+${
+  analysis.issues.filter((i) => i.severity === 'medium').length > 0
+    ? `⚠️ IMPORTANT: ${
+        analysis.issues.filter((i) => i.severity === 'medium').length
+      } medium-priority issues should be addressed soon.`
+    : '✅ No medium-priority issues found.'
+}
+
+## PAGE INFORMATION
+- Title: "${analysis.title || 'Missing'}" (${
+      analysis.title ? analysis.title.length : 0
+    } characters)
+- Meta Description: "${analysis.metaDescription || 'Missing'}" (${
+      analysis.metaDescription ? analysis.metaDescription.length : 0
+    } characters)
+- Heading Structure: H1: ${analysis.headingStructure.h1}, H2: ${
+      analysis.headingStructure.h2
+    }, H3: ${analysis.headingStructure.h3}
+- Schema Markup: ${
+      analysis.schemaCount > 0
+        ? `${analysis.schemaCount} schema(s) detected`
+        : 'No schema markup found'
+    }
+- Framework: ${
+      analysis.isReactApp
+        ? 'React (client-side rendering detected)'
+        : 'Static HTML'
     }
 
-    // Recommendations
-    response += `\nRecommendations:\n`;
+## TARGET KEYWORD ANALYSIS
+`;
+
+    // Add keyword analysis
+    if (analysis.keywordAnalysis) {
+      // Handle phrases (multi-word keywords)
+      if (
+        analysis.keywordAnalysis.phrases &&
+        analysis.keywordAnalysis.phrases.length > 0
+      ) {
+        const primaryPhrase = analysis.keywordAnalysis.phrases[0];
+        response += `Primary target keyword phrase appears to be: "${primaryPhrase.phrase}" (relevance score: ${primaryPhrase.score})\n`;
+
+        if (analysis.keywordAnalysis.phrases.length > 1) {
+          response += `Secondary keyword phrases: ${analysis.keywordAnalysis.phrases
+            .slice(1, 3)
+            .map((p) => `"${p.phrase}"`)
+            .join(', ')}\n`;
+        }
+
+        // Check if primary phrase is in title and description
+        const phraseInTitle =
+          analysis.title &&
+          analysis.title.toLowerCase().includes(primaryPhrase.phrase);
+        const phraseInDescription =
+          analysis.metaDescription &&
+          analysis.metaDescription.toLowerCase().includes(primaryPhrase.phrase);
+
+        response += `\nKeyword Phrase Optimization:\n`;
+        response += `- Title includes primary keyword phrase: ${
+          phraseInTitle ? '✅ Yes' : '❌ No'
+        }\n`;
+        response += `- Meta description includes primary keyword phrase: ${
+          phraseInDescription ? '✅ Yes' : '❌ No'
+        }\n`;
+      } else {
+        response += `No clear target keyword phrases detected.\n`;
+      }
+
+      // Handle single words
+      if (
+        analysis.keywordAnalysis.singleWords &&
+        analysis.keywordAnalysis.singleWords.length > 0
+      ) {
+        response += `\nTop single-word keywords:\n`;
+        analysis.keywordAnalysis.singleWords.slice(0, 3).forEach((word, i) => {
+          response += `${i + 1}. "${word.word}" (relevance score: ${
+            word.score
+          })\n`;
+        });
+      }
+    } else {
+      response += `No keyword analysis available. Consider adding more specific, relevant keywords to your content.\n`;
+    }
+
+    // Issues section with severity indicators and impact
+    response += `\n## ISSUES (PRIORITIZED BY IMPACT)
+`;
+
+    if (analysis.issues && analysis.issues.length > 0) {
+      // Group issues by severity
+      const highIssues = analysis.issues.filter((i) => i.severity === 'high');
+      const mediumIssues = analysis.issues.filter(
+        (i) => i.severity === 'medium'
+      );
+      const lowIssues = analysis.issues.filter((i) => i.severity === 'low');
+
+      // Display high severity issues first
+      if (highIssues.length > 0) {
+        response += `### CRITICAL ISSUES - FIX IMMEDIATELY:\n`;
+        highIssues.forEach((issue, i) => {
+          response += `${i + 1}. 🔴 ${issue.message} (Impact: ${
+            issue.impact
+          }/100)\n`;
+        });
+        response += `\n`;
+      }
+
+      // Display medium severity issues
+      if (mediumIssues.length > 0) {
+        response += `### IMPORTANT ISSUES - ADDRESS SOON:\n`;
+        mediumIssues.forEach((issue, i) => {
+          response += `${i + 1}. 🟠 ${issue.message} (Impact: ${
+            issue.impact
+          }/100)\n`;
+        });
+        response += `\n`;
+      }
+
+      // Display low severity issues
+      if (lowIssues.length > 0) {
+        response += `### MINOR ISSUES - CONSIDER FIXING:\n`;
+        lowIssues.forEach((issue, i) => {
+          response += `${i + 1}. 🟡 ${issue.message} (Impact: ${
+            issue.impact
+          }/100)\n`;
+        });
+        response += `\n`;
+      }
+    } else {
+      response += `✅ No issues found. Great job!\n`;
+    }
+
+    // Recommendations with clear next steps
+    response += `\n## RECOMMENDATIONS (PRIORITIZED BY IMPACT)
+`;
+
     if (analysis.recommendations && analysis.recommendations.length > 0) {
       analysis.recommendations.forEach((rec, i) => {
-        response += `${i + 1}. ${rec.text}\n`;
+        response += `### ${i + 1}. ${rec.text} (Impact: ${rec.impact}/100)\n`;
+        response += `**Why it matters**: ${rec.reason}\n`;
+        response += `**How to implement**: ${rec.implementation}\n\n`;
       });
     } else {
-      response += `No recommendations.\n`;
+      response += `No specific recommendations. Your page appears to be well-optimized.\n`;
     }
+
+    // Framework-specific notes
+    if (analysis.isReactApp) {
+      response += `\n## REACT-SPECIFIC CONSIDERATIONS
+- This analysis is based on the static HTML. The rendered content may differ.
+- For React apps, consider using Next.js or Gatsby for better SEO.
+- Ensure meta tags are properly managed with React Helmet or similar.
+- Test your site with Google's Mobile-Friendly Test to see what search engines actually see.
+`;
+    }
+
+    // Next steps
+    response += `\n## NEXT STEPS
+1. Address the critical issues first (if any)
+2. Implement the high-impact recommendations
+3. Consider a follow-up analysis after changes are made
+4. For a complete SEO strategy, also consider:
+   - Page speed optimization
+   - Mobile responsiveness
+   - Backlink strategy
+   - Content quality and freshness
+`;
 
     console.error('⭐ Formatting complete');
     return response;
