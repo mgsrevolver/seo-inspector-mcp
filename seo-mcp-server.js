@@ -1,45 +1,29 @@
 #!/usr/bin/env node
+import * as cheerio from 'cheerio';
+import fs from 'fs/promises';
+import path from 'path';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
-import * as cheerio from 'cheerio';
-import path from 'path';
-import fs from 'fs/promises';
-import puppeteer from 'puppeteer';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
 
 // Define the SEO tool
 const SEO_ANALYZER_TOOL = {
   name: 'analyzeSEO',
   description:
-    'Comprehensive SEO analysis for any web project. Intelligently detects tech stack and pre-renders JavaScript applications for accurate analysis.',
+    'Analyzes HTML files for SEO issues and provides recommendations.',
   inputSchema: {
     type: 'object',
     properties: {
       html: {
         type: 'string',
-        description:
-          'HTML content to analyze (optional if directoryPath or url is provided)',
-      },
-      url: {
-        type: 'string',
-        description:
-          'URL to analyze (optional if html or directoryPath is provided)',
+        description: 'HTML content to analyze (optional)',
       },
       directoryPath: {
         type: 'string',
-        description:
-          'Path to directory containing the web project to analyze (optional if html or url is provided)',
-      },
-      preRender: {
-        type: 'boolean',
-        description:
-          'Whether to pre-render JavaScript applications (default: true)',
+        description: 'Path to directory to analyze (optional)',
       },
     },
   },
@@ -67,162 +51,109 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   if (request.params.name === 'analyzeSEO') {
     try {
-      // Determine if pre-rendering is enabled (default to true)
-      const preRender = request.params.arguments.preRender !== false;
-
+      // Handle HTML content analysis
       if (request.params.arguments.html) {
-        // Simple HTML analysis
-        const result = analyzeHtml(
-          request.params.arguments.html,
-          request.params.arguments.url || 'example.com'
-        );
+        const html = request.params.arguments.html;
+        const analysis = analyzeHtml(html, 'Provided HTML');
 
         return {
           content: [
             {
               type: 'text',
-              text: formatSeoAnalysis(result),
+              text: formatAnalysisResult(analysis),
             },
           ],
         };
-      } else if (request.params.arguments.url) {
-        // URL analysis with pre-rendering
-        console.error(`Analyzing URL: ${request.params.arguments.url}`);
+      }
+      // Handle directory analysis
+      else if (request.params.arguments.directoryPath) {
+        const directoryPath = request.params.arguments.directoryPath;
+        console.error(`Analyzing directory: ${directoryPath}`);
 
-        if (preRender) {
-          const renderedPage = await preRenderWithPuppeteer(
-            request.params.arguments.url
-          );
-          const result = analyzeHtml(renderedPage.html, renderedPage.url);
-          result.isPreRendered = true;
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: formatSeoAnalysis(result),
-              },
-            ],
-          };
-        } else {
-          // Without pre-rendering, we'd need to fetch the HTML directly
-          // This is a simplified version - in reality, you'd use fetch or axios
-          return {
-            content: [
-              {
-                type: 'text',
-                text: 'Pre-rendering is disabled. Please enable pre-rendering to analyze URLs.',
-              },
-            ],
-          };
-        }
-      } else if (request.params.arguments.directoryPath) {
-        // Project analysis
-        console.error(
-          `Analyzing project directory: ${request.params.arguments.directoryPath}`
-        );
-
-        // Check if it's a JS project that needs pre-rendering
-        const techStack = await detectTechStack(
-          request.params.arguments.directoryPath
-        );
-
-        if (techStack.framework && preRender) {
-          // It's a JS project and pre-rendering is enabled
-          console.error(
-            `Detected ${techStack.framework} project. Attempting pre-rendering...`
-          );
-
+        try {
+          // Check if directory exists
           try {
-            const analysis = await analyzeJsProject(
-              request.params.arguments.directoryPath
-            );
-
+            await fs.access(directoryPath);
+          } catch (error) {
             return {
               content: [
                 {
                   type: 'text',
-                  text: formatSeoAnalysisWithTechStack(analysis),
+                  text: `Directory "${directoryPath}" does not exist or is not accessible. Please provide a valid directory path.`,
                 },
               ],
             };
-          } catch (error) {
-            console.error('Error analyzing JS project:', error);
+          }
 
-            // Fall back to static analysis
-            console.error('Falling back to static HTML analysis...');
-            const htmlFiles = await findHtmlFiles(
-              request.params.arguments.directoryPath
-            );
+          // Find HTML files
+          const htmlFiles = await findHtmlFiles(directoryPath);
+
+          if (htmlFiles.length === 0) {
+            // Look for index.html in common locations
+            const commonLocations = [
+              path.join(directoryPath, 'public', 'index.html'),
+              path.join(directoryPath, 'build', 'index.html'),
+              path.join(directoryPath, 'dist', 'index.html'),
+              path.join(directoryPath, 'index.html'),
+            ];
+
+            for (const location of commonLocations) {
+              try {
+                await fs.access(location);
+                htmlFiles.push(location);
+                console.error(`Found index.html at ${location}`);
+              } catch (error) {
+                // File doesn't exist, continue checking
+              }
+            }
 
             if (htmlFiles.length === 0) {
               return {
                 content: [
                   {
                     type: 'text',
-                    text: `No HTML files found in ${request.params.arguments.directoryPath}. Pre-rendering failed with error: ${error.message}`,
+                    text: `No HTML files found in ${directoryPath} or common subdirectories (public, build, dist).
+                    
+If this is a React project, please specify the path to the public or build directory, or provide the path to a specific HTML file.`,
                   },
                 ],
               };
             }
-
-            const file = htmlFiles[0]; // Analyze the first HTML file
-            const content = await fs.readFile(file, 'utf8');
-            const result = analyzeHtml(content, path.basename(file));
-
-            // Add tech stack info
-            result.techStack = techStack;
-            result.preRenderingFailed = true;
-            result.recommendations.push(
-              'Pre-rendering failed. Consider building the project first or checking for errors.'
-            );
-
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: formatSeoAnalysisWithTechStack(result),
-                },
-              ],
-            };
-          }
-        } else {
-          // It's not a JS project or pre-rendering is disabled
-          // Perform static HTML analysis
-          const htmlFiles = await findHtmlFiles(
-            request.params.arguments.directoryPath
-          );
-
-          if (htmlFiles.length === 0) {
-            return {
-              content: [
-                {
-                  type: 'text',
-                  text: `No HTML files found in ${request.params.arguments.directoryPath}`,
-                },
-              ],
-            };
           }
 
-          // Analyze all HTML files
-          const analyses = [];
+          // Analyze each HTML file
+          const results = [];
 
           for (const file of htmlFiles) {
-            const content = await fs.readFile(file, 'utf8');
-            const result = analyzeHtml(
-              content,
-              path.relative(request.params.arguments.directoryPath, file)
-            );
-            analyses.push(result);
+            try {
+              const content = await fs.readFile(file, 'utf8');
+              const relativePath = path.relative(directoryPath, file);
+              const analysis = analyzeHtml(content, relativePath);
+              results.push(analysis);
+            } catch (error) {
+              console.error(`Error analyzing ${file}:`, error);
+            }
           }
 
+          // Format and return results
           return {
             content: [
               {
                 type: 'text',
-                text: formatMultipleAnalyses(analyses, techStack),
+                text: formatDirectoryAnalysisResults(results, directoryPath),
               },
             ],
+          };
+        } catch (error) {
+          console.error('Error analyzing directory:', error);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error analyzing directory: ${error.message}`,
+              },
+            ],
+            isError: true,
           };
         }
       } else {
@@ -230,7 +161,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: 'Please provide either HTML content, a URL, or a directory path to analyze.',
+              text: 'Please provide either HTML content or a directory path to analyze.',
             },
           ],
         };
@@ -248,116 +179,34 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       };
     }
   }
-
-  // Handle other tools...
-  return {
-    content: [
-      {
-        type: 'text',
-        text: `Unknown tool: ${request.params.name}`,
-      },
-    ],
-    isError: true,
-  };
 });
 
-// Add this function to detect if it's a React project
-async function isReactProject(directoryPath) {
-  try {
-    // Check for package.json with React dependency
-    const packageJsonPath = path.join(directoryPath, 'package.json');
-    const packageJsonExists = await fs
-      .access(packageJsonPath)
-      .then(() => true)
-      .catch(() => false);
-
-    if (packageJsonExists) {
-      const packageJson = JSON.parse(
-        await fs.readFile(packageJsonPath, 'utf8')
-      );
-      if (
-        packageJson.dependencies &&
-        (packageJson.dependencies.react || packageJson.devDependencies?.react)
-      ) {
-        return true;
-      }
-    }
-
-    // Check for typical React project structure
-    const srcFolderExists = await fs
-      .access(path.join(directoryPath, 'src'))
-      .then(() => true)
-      .catch(() => false);
-    const publicFolderExists = await fs
-      .access(path.join(directoryPath, 'public'))
-      .then(() => true)
-      .catch(() => false);
-
-    if (srcFolderExists && publicFolderExists) {
-      return true;
-    }
-
-    return false;
-  } catch (error) {
-    console.error('Error detecting React project:', error);
-    return false;
-  }
-}
-
-// Modify the findHtmlFiles function to be React-aware
+// Find HTML files in a directory
 async function findHtmlFiles(directory) {
   const htmlFiles = [];
 
-  // Check if this is a React project
-  const reactProject = await isReactProject(directory);
-
-  if (reactProject) {
-    console.error('Detected React project - focusing on index.html');
-
-    // Look for index.html in common React locations
-    const possibleLocations = [
-      path.join(directory, 'public', 'index.html'),
-      path.join(directory, 'index.html'),
-      path.join(directory, 'dist', 'index.html'),
-      path.join(directory, 'build', 'index.html'),
-    ];
-
-    for (const location of possibleLocations) {
-      try {
-        await fs.access(location);
-        htmlFiles.push(location);
-        console.error(`Found React index.html at ${location}`);
-        break; // Stop after finding the first one
-      } catch (error) {
-        // File doesn't exist, try next location
-      }
-    }
-
-    if (htmlFiles.length === 0) {
-      console.error('No index.html found in typical React locations');
-    }
-
-    return htmlFiles;
-  }
-
-  // For non-React projects, use the original directory traversal
   async function traverse(dir) {
-    const files = await fs.readdir(dir, { withFileTypes: true });
+    try {
+      const entries = await fs.readdir(dir, { withFileTypes: true });
 
-    for (const file of files) {
-      const filePath = path.join(dir, file.name);
-
-      // Skip node_modules and other common build directories
-      if (file.isDirectory()) {
-        if (
-          ['node_modules', '.git', 'dist', 'build', '.next'].includes(file.name)
-        ) {
+      for (const entry of entries) {
+        if (entry.name === 'node_modules' || entry.name === '.git') {
           continue;
         }
-        await traverse(filePath);
-      } else if (file.name.endsWith('.html') || file.name.endsWith('.htm')) {
-        htmlFiles.push(filePath);
+
+        const fullPath = path.join(dir, entry.name);
+
+        if (entry.isDirectory()) {
+          await traverse(fullPath);
+        } else if (
+          entry.name.endsWith('.html') ||
+          entry.name.endsWith('.htm')
+        ) {
+          htmlFiles.push(fullPath);
+        }
       }
+    } catch (error) {
+      console.error(`Error traversing ${dir}:`, error);
     }
   }
 
@@ -365,44 +214,7 @@ async function findHtmlFiles(directory) {
   return htmlFiles;
 }
 
-// Update the analyzeHtmlFile function to provide more context for React projects
-async function analyzeHtmlFile(filePath) {
-  const content = await fs.readFile(filePath, 'utf8');
-  const fileName = path.basename(filePath);
-  const isIndexHtml = fileName === 'index.html';
-
-  const analysis = analyzeHtml(content, filePath);
-
-  // Add React-specific context if it's index.html
-  if (isIndexHtml) {
-    analysis.isReactIndexHtml = true;
-    analysis.note =
-      "This is likely a React app's index.html. Remember that React apps often inject content dynamically, so some SEO elements might be added at runtime.";
-
-    // Check for common React SEO issues
-    if (
-      !content.includes('data-react-helmet') &&
-      !content.includes('react-helmet')
-    ) {
-      analysis.recommendations.push(
-        'Consider using react-helmet for managing document head in React'
-      );
-    }
-
-    if (!content.includes('robots') && !content.includes('googlebot')) {
-      analysis.recommendations.push(
-        'Add meta robots tags for search engine crawling instructions'
-      );
-    }
-  }
-
-  return {
-    filePath,
-    ...analysis,
-  };
-}
-
-// Function to analyze HTML
+// Analyze HTML content
 function analyzeHtml(html, pageIdentifier) {
   const $ = cheerio.load(html);
   const issues = [];
@@ -412,35 +224,51 @@ function analyzeHtml(html, pageIdentifier) {
   const title = $('title').text();
   const metaDescription = $('meta[name="description"]').attr('content');
   const h1Count = $('h1').length;
+  const h2Count = $('h2').length;
+  const h3Count = $('h3').length;
+
+  // Check for React-specific elements
+  const hasReactRoot =
+    $('#root').length > 0 ||
+    $('#app').length > 0 ||
+    $('[data-reactroot]').length > 0;
 
   // Check title
   if (!title) {
     issues.push({ severity: 'high', message: 'Missing page title' });
+    recommendations.push('Add a descriptive page title');
   } else if (title.length > 60) {
     issues.push({
       severity: 'medium',
       message: `Title length (${title.length} chars) exceeds recommended maximum of 60 characters`,
     });
+    recommendations.push('Shorten title to under 60 characters');
   }
 
   // Check meta description
   if (!metaDescription) {
     issues.push({ severity: 'high', message: 'Missing meta description' });
+    recommendations.push('Add a descriptive meta description');
   } else if (metaDescription.length < 50 || metaDescription.length > 160) {
     issues.push({
       severity: 'medium',
       message: `Meta description length (${metaDescription.length} chars) outside recommended range (50-160)`,
     });
+    recommendations.push(
+      'Adjust meta description to be between 50-160 characters'
+    );
   }
 
   // Check headings
   if (h1Count === 0) {
     issues.push({ severity: 'high', message: 'No H1 heading found' });
+    recommendations.push('Add an H1 heading to your page');
   } else if (h1Count > 1) {
     issues.push({
       severity: 'medium',
       message: `Multiple H1 headings found (${h1Count})`,
     });
+    recommendations.push('Use only one H1 heading per page');
   }
 
   // Check images
@@ -456,29 +284,72 @@ function analyzeHtml(html, pageIdentifier) {
     }
   });
 
-  // Schema validation
+  const imagesWithoutAlt = $('img:not([alt])').length;
+  if (imagesWithoutAlt > 0) {
+    recommendations.push('Add alt text to all images');
+  }
+
+  // Check for schema markup
   const schemas = [];
   $('script[type="application/ld+json"]').each((i, script) => {
     try {
       const schema = JSON.parse($(script).html());
       schemas.push(schema);
-
-      // Basic schema validation
-      if (!schema['@context'] || !schema['@type']) {
-        issues.push({
-          severity: 'high',
-          message: 'Invalid schema: missing @context or @type',
-        });
-      }
     } catch (e) {
       issues.push({ severity: 'high', message: 'Invalid JSON-LD schema' });
     }
   });
 
-  // Add recommendations
   if (schemas.length === 0) {
+    issues.push({
+      severity: 'medium',
+      message: 'No structured data (schema.org) found',
+    });
+    recommendations.push('Add structured data using JSON-LD');
+  }
+
+  // Check for canonical URL
+  if ($('link[rel="canonical"]').length === 0) {
+    issues.push({ severity: 'medium', message: 'Missing canonical URL tag' });
+    recommendations.push('Add a canonical URL tag');
+  }
+
+  // Check for viewport meta tag
+  if ($('meta[name="viewport"]').length === 0) {
+    issues.push({ severity: 'medium', message: 'Missing viewport meta tag' });
+    recommendations.push('Add a viewport meta tag for better mobile rendering');
+  }
+
+  // Check for social media tags
+  const hasOgTags = $('meta[property^="og:"]').length > 0;
+  const hasTwitterTags = $('meta[name^="twitter:"]').length > 0;
+
+  if (!hasOgTags) {
+    issues.push({ severity: 'low', message: 'Missing Open Graph meta tags' });
     recommendations.push(
-      'Add structured data using JSON-LD for rich search results'
+      'Add Open Graph meta tags for better social media sharing'
+    );
+  }
+
+  if (!hasTwitterTags) {
+    issues.push({ severity: 'low', message: 'Missing Twitter Card meta tags' });
+    recommendations.push(
+      'Add Twitter Card meta tags for better Twitter sharing'
+    );
+  }
+
+  // React-specific recommendations
+  if (hasReactRoot) {
+    issues.push({
+      severity: 'info',
+      message:
+        'This appears to be a React application with client-side rendering',
+    });
+    recommendations.push(
+      'Consider using server-side rendering (Next.js) or static site generation (Gatsby) for better SEO'
+    );
+    recommendations.push(
+      'Note: This analysis is limited to the static HTML. The rendered content may differ.'
     );
   }
 
@@ -488,14 +359,112 @@ function analyzeHtml(html, pageIdentifier) {
     metaDescription,
     headingStructure: {
       h1: h1Count,
-      h2: $('h2').length,
-      h3: $('h3').length,
+      h2: h2Count,
+      h3: h3Count,
     },
     schemaCount: schemas.length,
     issues,
     recommendations,
-    schemas,
+    isReactApp: hasReactRoot,
   };
+}
+
+// Format a single analysis result
+function formatAnalysisResult(result) {
+  return `SEO ANALYSIS FOR: ${result.pageIdentifier}
+
+PAGE INFO:
+- Title: ${result.title || 'Missing'} (${
+    result.title ? result.title.length : 0
+  } chars)
+- Meta Description: ${result.metaDescription || 'Missing'} (${
+    result.metaDescription ? result.metaDescription.length : 0
+  } chars)
+- Heading Structure: H1: ${result.headingStructure.h1}, H2: ${
+    result.headingStructure.h2
+  }, H3: ${result.headingStructure.h3}
+- Schema Count: ${result.schemaCount}
+${result.isReactApp ? '- React App: Yes (client-side rendering detected)' : ''}
+
+ISSUES:
+${result.issues
+  .map((issue) => `- [${issue.severity.toUpperCase()}] ${issue.message}`)
+  .join('\n')}
+
+RECOMMENDATIONS:
+${result.recommendations.map((rec) => `- ${rec}`).join('\n')}
+
+${
+  result.isReactApp
+    ? '\nNOTE: This is a static HTML analysis. For JavaScript-heavy sites like React apps, the rendered content may differ from the static HTML.'
+    : ''
+}`;
+}
+
+// Format directory analysis results
+function formatDirectoryAnalysisResults(results, directoryPath) {
+  let output = `SEO ANALYSIS FOR DIRECTORY: ${directoryPath}\n\n`;
+
+  output += `Analyzed ${results.length} HTML files\n\n`;
+
+  // Count issues by severity
+  const issueCounts = {
+    high: 0,
+    medium: 0,
+    low: 0,
+    info: 0,
+  };
+
+  results.forEach((result) => {
+    result.issues.forEach((issue) => {
+      if (issue.severity in issueCounts) {
+        issueCounts[issue.severity]++;
+      }
+    });
+  });
+
+  output += `ISSUE SUMMARY:\n`;
+  output += `- High: ${issueCounts.high}\n`;
+  output += `- Medium: ${issueCounts.medium}\n`;
+  output += `- Low: ${issueCounts.low}\n`;
+  output += `- Info: ${issueCounts.info}\n\n`;
+
+  // Check if any React apps were detected
+  const reactApps = results.filter((r) => r.isReactApp);
+  if (reactApps.length > 0) {
+    output += `REACT APPLICATIONS DETECTED: ${reactApps.length} files\n`;
+    output += `Note: For React applications, this analysis is limited to the static HTML. The rendered content may differ.\n`;
+    output += `Consider using server-side rendering (Next.js) or static site generation (Gatsby) for better SEO.\n\n`;
+  }
+
+  // Individual file results
+  results.forEach((result, index) => {
+    output += `FILE ${index + 1}: ${result.pageIdentifier}\n`;
+    output += `- Title: ${result.title || 'Missing'} (${
+      result.title ? result.title.length : 0
+    } chars)\n`;
+    output += `- Meta Description: ${result.metaDescription || 'Missing'} (${
+      result.metaDescription ? result.metaDescription.length : 0
+    } chars)\n`;
+    output += `- Heading Structure: H1: ${result.headingStructure.h1}, H2: ${result.headingStructure.h2}, H3: ${result.headingStructure.h3}\n`;
+    output += `- Schema Count: ${result.schemaCount}\n`;
+    output += `- Issues: ${result.issues.length}\n\n`;
+  });
+
+  // Common recommendations
+  const allRecommendations = new Set();
+  results.forEach((result) => {
+    result.recommendations.forEach((rec) => {
+      allRecommendations.add(rec);
+    });
+  });
+
+  output += `COMMON RECOMMENDATIONS:\n`;
+  Array.from(allRecommendations).forEach((rec) => {
+    output += `- ${rec}\n`;
+  });
+
+  return output;
 }
 
 // Start the server
@@ -509,479 +478,3 @@ runServer().catch((error) => {
   console.error('Fatal error running server:', error);
   process.exit(1);
 });
-
-// Add this function to pre-render a page using Puppeteer
-async function preRenderWithPuppeteer(url, waitTime = 5000) {
-  console.error(`Pre-rendering ${url} with Puppeteer...`);
-  let browser = null;
-
-  try {
-    // Launch headless browser
-    browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
-
-    const page = await browser.newPage();
-
-    // Set viewport to desktop size
-    await page.setViewport({ width: 1280, height: 800 });
-
-    // Navigate to the URL
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-
-    // Wait additional time for any delayed JavaScript execution
-    await page.waitForTimeout(waitTime);
-
-    // Get the fully rendered HTML
-    const renderedHtml = await page.content();
-
-    // Get the page title
-    const title = await page.title();
-
-    // Close the browser
-    await browser.close();
-    browser = null;
-
-    return {
-      html: renderedHtml,
-      title,
-      url,
-    };
-  } catch (error) {
-    console.error('Error pre-rendering with Puppeteer:', error);
-    if (browser) await browser.close();
-    throw error;
-  }
-}
-
-// Function to start a development server for a project
-async function startDevServer(directoryPath) {
-  try {
-    console.error('Attempting to start development server...');
-
-    // Check package.json for start script
-    const packageJsonPath = path.join(directoryPath, 'package.json');
-    const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
-
-    let startCommand = null;
-    let port = 3000; // Default port
-
-    if (packageJson.scripts) {
-      if (packageJson.scripts.dev) {
-        startCommand = 'npm run dev';
-      } else if (packageJson.scripts.start) {
-        startCommand = 'npm run start';
-      } else if (packageJson.scripts.serve) {
-        startCommand = 'npm run serve';
-      }
-    }
-
-    if (!startCommand) {
-      console.error('No start script found in package.json');
-      return null;
-    }
-
-    // Try to determine the port from the start command or config files
-    // This is a simplistic approach - in reality, you'd need to parse the command or config files
-    if (packageJson.scripts && startCommand) {
-      const scriptContent =
-        packageJson.scripts[startCommand.replace('npm run ', '')];
-      if (scriptContent) {
-        const portMatch = scriptContent.match(/--port[=\s](\d+)/);
-        if (portMatch && portMatch[1]) {
-          port = parseInt(portMatch[1], 10);
-        }
-      }
-    }
-
-    // Start the server in a detached process
-    console.error(`Starting dev server with command: ${startCommand}`);
-    const process = exec(startCommand, { cwd: directoryPath });
-
-    // Return server info
-    return {
-      process,
-      port,
-      url: `http://localhost:${port}`,
-    };
-  } catch (error) {
-    console.error('Error starting development server:', error);
-    return null;
-  }
-}
-
-// Function to analyze a React/JS project with pre-rendering
-async function analyzeJsProject(directoryPath) {
-  let server = null;
-
-  try {
-    // 1. Detect if it's a JS project
-    const techStack = await detectTechStack(directoryPath);
-    console.error('Detected tech stack:', techStack);
-
-    // 2. Start a development server
-    server = await startDevServer(directoryPath);
-    if (!server) {
-      throw new Error('Could not start development server');
-    }
-
-    // 3. Wait for server to be ready (simple approach - in reality, you'd poll the URL)
-    console.error(`Waiting for server to be ready at ${server.url}...`);
-    await new Promise((resolve) => setTimeout(resolve, 10000));
-
-    // 4. Use Puppeteer to render the page
-    const renderedPage = await preRenderWithPuppeteer(server.url);
-
-    // 5. Analyze the rendered HTML
-    const analysis = analyzeHtml(renderedPage.html, renderedPage.url);
-
-    // 6. Add tech stack information to the analysis
-    analysis.techStack = techStack;
-    analysis.isPreRendered = true;
-
-    // 7. Add specific recommendations based on tech stack
-    if (techStack.framework) {
-      if (
-        techStack.framework.includes('React') &&
-        !techStack.seoTools.includes('React Helmet')
-      ) {
-        analysis.recommendations.push(
-          'Consider using React Helmet for better meta tag management'
-        );
-      }
-
-      if (techStack.rendering === 'CSR (Client-side rendering)') {
-        analysis.recommendations.push(
-          'Consider implementing server-side rendering (SSR) or static site generation (SSG) for better SEO'
-        );
-
-        if (techStack.framework.includes('React')) {
-          analysis.recommendations.push(
-            'Next.js provides built-in SSR/SSG capabilities for React applications'
-          );
-        } else if (techStack.framework.includes('Vue')) {
-          analysis.recommendations.push(
-            'Nuxt.js provides built-in SSR/SSG capabilities for Vue applications'
-          );
-        }
-      }
-    }
-
-    return analysis;
-  } catch (error) {
-    console.error('Error analyzing JS project:', error);
-    throw error;
-  } finally {
-    // Clean up: stop the development server
-    if (server && server.process) {
-      console.error('Stopping development server...');
-      server.process.kill();
-    }
-  }
-}
-
-// Function to detect the tech stack
-async function detectTechStack(directoryPath) {
-  const techStack = {
-    framework: null,
-    rendering: null,
-    router: null,
-    seoTools: [],
-    buildTool: null,
-  };
-
-  try {
-    // Check package.json
-    const packageJsonPath = path.join(directoryPath, 'package.json');
-    const packageJsonExists = await fs
-      .access(packageJsonPath)
-      .then(() => true)
-      .catch(() => false);
-
-    if (packageJsonExists) {
-      const packageJson = JSON.parse(
-        await fs.readFile(packageJsonPath, 'utf8')
-      );
-      const deps = {
-        ...packageJson.dependencies,
-        ...packageJson.devDependencies,
-      };
-
-      // Framework detection
-      if (deps.react) techStack.framework = 'React';
-      else if (deps.vue) techStack.framework = 'Vue';
-      else if (deps.angular) techStack.framework = 'Angular';
-      else if (deps.svelte) techStack.framework = 'Svelte';
-
-      // Rendering approach
-      if (deps.next) {
-        techStack.framework = 'Next.js (React)';
-        techStack.rendering = 'SSR/SSG';
-      } else if (deps.gatsby) {
-        techStack.framework = 'Gatsby (React)';
-        techStack.rendering = 'SSG';
-      } else if (deps.nuxt) {
-        techStack.framework = 'Nuxt.js (Vue)';
-        techStack.rendering = 'SSR/SSG';
-      } else if (deps['@angular/universal']) {
-        techStack.rendering = 'SSR';
-      } else if (deps['react-snap'] || deps.prerender) {
-        techStack.rendering = 'Pre-rendered';
-      } else if (techStack.framework) {
-        techStack.rendering = 'CSR (Client-side rendering)';
-      }
-
-      // Router detection
-      if (deps['react-router'] || deps['react-router-dom'])
-        techStack.router = 'React Router';
-      else if (deps['vue-router']) techStack.router = 'Vue Router';
-      else if (deps['@angular/router']) techStack.router = 'Angular Router';
-      else if (deps.next || deps.gatsby || deps.nuxt)
-        techStack.router = 'Built-in routing';
-
-      // SEO tools
-      if (deps['react-helmet']) techStack.seoTools.push('React Helmet');
-      if (deps['react-helmet-async'])
-        techStack.seoTools.push('React Helmet Async');
-      if (deps['next-seo']) techStack.seoTools.push('Next SEO');
-      if (deps['vue-meta']) techStack.seoTools.push('Vue Meta');
-      if (deps['react-snap']) techStack.seoTools.push('React Snap');
-      if (deps.prerender) techStack.seoTools.push('Prerender');
-
-      // Build tools
-      if (deps.webpack) techStack.buildTool = 'Webpack';
-      else if (deps.vite) techStack.buildTool = 'Vite';
-      else if (deps.parcel) techStack.buildTool = 'Parcel';
-      else if (deps['@angular/cli']) techStack.buildTool = 'Angular CLI';
-    }
-
-    // Check for config files if package.json didn't give us enough info
-    if (!techStack.framework) {
-      const files = await fs.readdir(directoryPath);
-      if (files.includes('angular.json')) techStack.framework = 'Angular';
-      else if (files.includes('vue.config.js')) techStack.framework = 'Vue';
-      else if (files.includes('gatsby-config.js'))
-        techStack.framework = 'Gatsby (React)';
-      else if (files.includes('next.config.js'))
-        techStack.framework = 'Next.js (React)';
-      else if (files.includes('nuxt.config.js'))
-        techStack.framework = 'Nuxt.js (Vue)';
-      else if (
-        (await fileExists(path.join(directoryPath, 'src', 'App.jsx'))) ||
-        (await fileExists(path.join(directoryPath, 'src', 'App.tsx'))) ||
-        (await fileExists(path.join(directoryPath, 'src', 'App.js')))
-      ) {
-        techStack.framework = 'React (likely)';
-      }
-    }
-
-    return techStack;
-  } catch (error) {
-    console.error('Error detecting tech stack:', error);
-    return techStack;
-  }
-}
-
-async function fileExists(filePath) {
-  return fs
-    .access(filePath)
-    .then(() => true)
-    .catch(() => false);
-}
-
-// Format SEO analysis with tech stack information
-function formatSeoAnalysisWithTechStack(result) {
-  let markdown = formatSeoAnalysis(result);
-
-  // Add tech stack information if available
-  if (result.techStack) {
-    const techStackInfo = `
-## Technology Stack
-
-- **Framework**: ${result.techStack.framework || 'Not detected'}
-- **Rendering Approach**: ${result.techStack.rendering || 'Not detected'}
-- **Routing**: ${result.techStack.router || 'Not detected'}
-${
-  result.techStack.seoTools && result.techStack.seoTools.length > 0
-    ? `- **SEO Tools**: ${result.techStack.seoTools.join(', ')}`
-    : '- **SEO Tools**: None detected'
-}
-- **Build Tool**: ${result.techStack.buildTool || 'Not detected'}
-${result.isPreRendered ? '- **Analysis**: Based on pre-rendered page ✅' : ''}
-${
-  result.preRenderingFailed
-    ? '- **Analysis**: Pre-rendering failed, using static HTML ⚠️'
-    : ''
-}
-
-`;
-
-    // Insert tech stack info after the first heading
-    const firstHeadingEnd = markdown.indexOf('\n\n', markdown.indexOf('#'));
-    if (firstHeadingEnd !== -1) {
-      markdown =
-        markdown.slice(0, firstHeadingEnd + 2) +
-        techStackInfo +
-        markdown.slice(firstHeadingEnd + 2);
-    } else {
-      markdown = markdown + '\n' + techStackInfo;
-    }
-  }
-
-  return markdown;
-}
-
-// Format multiple analyses
-function formatMultipleAnalyses(analyses, techStack) {
-  let markdown = `# SEO Analysis Summary\n\n`;
-
-  // Add tech stack information if available
-  if (techStack && techStack.framework) {
-    markdown += `## Technology Stack\n\n`;
-    markdown += `- **Framework**: ${techStack.framework || 'Not detected'}\n`;
-    markdown += `- **Rendering Approach**: ${
-      techStack.rendering || 'Not detected'
-    }\n`;
-    markdown += `- **Routing**: ${techStack.router || 'Not detected'}\n`;
-
-    if (techStack.seoTools && techStack.seoTools.length > 0) {
-      markdown += `- **SEO Tools**: ${techStack.seoTools.join(', ')}\n`;
-    } else {
-      markdown += `- **SEO Tools**: None detected\n`;
-    }
-
-    markdown += `- **Build Tool**: ${
-      techStack.buildTool || 'Not detected'
-    }\n\n`;
-  }
-
-  // Count total issues by severity
-  const totalIssues = {
-    high: 0,
-    medium: 0,
-    low: 0,
-  };
-
-  analyses.forEach((analysis) => {
-    analysis.issues.forEach((issue) => {
-      if (issue.severity in totalIssues) {
-        totalIssues[issue.severity]++;
-      }
-    });
-  });
-
-  // Display issue summary
-  markdown += `## Issues Summary\n\n`;
-  markdown += `- 🔴 High: ${totalIssues.high}\n`;
-  markdown += `- 🟠 Medium: ${totalIssues.medium}\n`;
-  markdown += `- 🟢 Low: ${totalIssues.low}\n\n`;
-
-  // Display individual file results
-  analyses.forEach((analysis, index) => {
-    markdown += `## ${index + 1}. ${analysis.pageIdentifier}\n\n`;
-
-    // Add title and meta description info
-    markdown += `- **Title**: ${analysis.title || 'Missing'} ${
-      analysis.title ? `(${analysis.title.length} chars)` : ''
-    }\n`;
-    markdown += `- **Meta Description**: ${
-      analysis.metaDescription || 'Missing'
-    } ${
-      analysis.metaDescription
-        ? `(${analysis.metaDescription.length} chars)`
-        : ''
-    }\n`;
-    markdown += `- **Issues**: ${analysis.issues.length}\n\n`;
-
-    // Add collapsible details
-    markdown += `<details>\n<summary>View detailed analysis</summary>\n\n`;
-
-    // Add heading structure
-    markdown += `### Heading Structure\n\n`;
-    markdown += `- H1: ${analysis.headingStructure.h1}\n`;
-    markdown += `- H2: ${analysis.headingStructure.h2}\n`;
-    markdown += `- H3: ${analysis.headingStructure.h3}\n\n`;
-
-    // Add issues
-    if (analysis.issues.length > 0) {
-      markdown += `### Issues\n\n`;
-      analysis.issues.forEach((issue, i) => {
-        const indicator =
-          issue.severity === 'high'
-            ? '🔴'
-            : issue.severity === 'medium'
-            ? '🟠'
-            : '🟢';
-        markdown += `${
-          i + 1
-        }. ${indicator} **${issue.severity.toUpperCase()}**: ${
-          issue.message
-        }\n`;
-      });
-      markdown += '\n';
-    }
-
-    // Add recommendations
-    if (analysis.recommendations && analysis.recommendations.length > 0) {
-      markdown += `### Recommendations\n\n`;
-      analysis.recommendations.forEach((rec, i) => {
-        markdown += `${i + 1}. 💡 ${rec}\n`;
-      });
-      markdown += '\n';
-    }
-
-    markdown += `</details>\n\n`;
-  });
-
-  return markdown;
-}
-
-// Format a single SEO analysis
-function formatSeoAnalysis(result) {
-  return `# SEO Analysis for: ${result.pageIdentifier}
-
-## Page Information
-- **Title**: ${result.title || 'Missing'} ${
-    result.title ? `(${result.title.length} chars)` : ''
-  }
-- **Meta Description**: ${result.metaDescription || 'Missing'} ${
-    result.metaDescription ? `(${result.metaDescription.length} chars)` : ''
-  }
-
-## Heading Structure
-- H1: ${result.headingStructure.h1}
-- H2: ${result.headingStructure.h2}
-- H3: ${result.headingStructure.h3}
-
-## Schema Markup
-- Schema Count: ${result.schemaCount}
-
-## Issues Found (${result.issues.length})
-${result.issues.length === 0 ? '✅ No issues found!' : ''}
-${result.issues
-  .map((issue, index) => {
-    const indicator =
-      issue.severity === 'high'
-        ? '🔴'
-        : issue.severity === 'medium'
-        ? '🟠'
-        : '🟢';
-    return `${index + 1}. ${indicator} **${issue.severity.toUpperCase()}**: ${
-      issue.message
-    }`;
-  })
-  .join('\n')}
-
-${
-  result.recommendations && result.recommendations.length > 0
-    ? `
-## Recommendations
-${result.recommendations
-  .map((rec, index) => `${index + 1}. 💡 ${rec}`)
-  .join('\n')}
-`
-    : ''
-}
-`;
-}

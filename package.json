@@ -2,18 +2,18 @@
   "name": "seo-inspector-mcp",
   "version": "1.0.0",
   "description": "SEO Inspector and Schema Validator MCP for Cursor",
-  "main": "seo-mcp-server.js",
+  "main": "src/server.js",
   "type": "module",
   "scripts": {
-    "start": "node seo-mcp-server.js",
-    "start-mcp": "npx supergateway --port 8768 --stdio \"node seo-mcp-server.js\""
+    "start": "node src/server.js",
+    "start-mcp": "npx supergateway --port 8768 --stdio \"node src/server.js\"",
+    "seo-analysis": "npx supergateway --port 8768 --stdio \"node src/server.js\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "*",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "puppeteer": "^24.4.0",
+    "puppeteer": "^19.7.2",
     "supergateway": "*"
   }
 }
