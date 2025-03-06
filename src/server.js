@@ -192,20 +192,44 @@ function formatAnalysisForDisplay(analysis) {
     console.error('⭐ Starting to format analysis...');
 
     // Create a more structured, actionable response
-    let response = `# SEO ANALYSIS REPORT
+    let response = `# SEO ANALYSIS REPORT\n\n`;
 
-## SUMMARY
+    // Add confidence indicator for React apps
+    if (analysis.isReactApp) {
+      response += `## ⚠️ IMPORTANT LIMITATION WARNING ⚠️
+This appears to be a client-side rendered React application. This analysis has a **LOW CONFIDENCE SCORE (${analysis.confidenceScore}%)** because:
+
+1. This tool can only analyze the initial HTML, not the content rendered by React after JavaScript executes
+2. Search engines may see different content than what appears in your browser
+3. Many SEO elements may be missing from this analysis if they're added by React components
+
+For accurate analysis, you should:
+- View your page source (right-click > View Page Source) to see what search engines actually see
+- Consider switching to server-side rendering (Next.js, Gatsby) for better SEO
+- Use React Helmet to ensure meta tags are present in the initial HTML
+
+**The issues below are based ONLY on the initial HTML, not your rendered React app.**\n\n`;
+    }
+
+    response += `## SUMMARY
 This analysis identified ${analysis.issues.length} issues with your HTML. 
 ${
-  analysis.issues.filter((i) => i.severity === 'high').length > 0
+  analysis.issues.filter((i) => i.severity === 'critical').length > 0
     ? `⚠️ CRITICAL: ${
+        analysis.issues.filter((i) => i.severity === 'critical').length
+      } critical issues require immediate attention.`
+    : ''
+}
+${
+  analysis.issues.filter((i) => i.severity === 'high').length > 0
+    ? `⚠️ HIGH PRIORITY: ${
         analysis.issues.filter((i) => i.severity === 'high').length
-      } high-priority issues require immediate attention.`
-    : '✅ No critical issues found.'
+      } high-priority issues require attention.`
+    : '✅ No high-priority issues found.'
 }
 ${
   analysis.issues.filter((i) => i.severity === 'medium').length > 0
-    ? `⚠️ IMPORTANT: ${
+    ? `⚠️ MEDIUM PRIORITY: ${
         analysis.issues.filter((i) => i.severity === 'medium').length
       } medium-priority issues should be addressed soon.`
     : '✅ No medium-priority issues found.'
@@ -228,9 +252,27 @@ ${
     }
 - Framework: ${
       analysis.isReactApp
-        ? 'React (client-side rendering detected)'
+        ? '**React (client-side rendering detected)**'
         : 'Static HTML'
     }
+- Robots Directives: ${
+      analysis.robotsDirectives?.noindex
+        ? '**noindex** (page will not be indexed by search engines)'
+        : 'index'
+    }, ${
+      analysis.robotsDirectives?.nofollow
+        ? '**nofollow** (links will not be followed)'
+        : 'follow'
+    }
+- Social Tags: ${
+      analysis.socialTags?.hasOpenGraph ? 'Open Graph ✓' : 'Open Graph ✗'
+    }, ${
+      analysis.socialTags?.hasTwitterCards
+        ? 'Twitter Cards ✓'
+        : 'Twitter Cards ✗'
+    }
+- Canonical URL: ${analysis.hasCanonical ? 'Present ✓' : 'Missing ✗'}
+- Mobile Viewport: ${analysis.hasViewport ? 'Present ✓' : 'Missing ✗'}
 
 ## TARGET KEYWORD ANALYSIS
 `;
@@ -267,6 +309,11 @@ ${
         response += `- Meta description includes primary keyword phrase: ${
           phraseInDescription ? '✅ Yes' : '❌ No'
         }\n`;
+
+        // Add keyword density
+        if (primaryPhrase.density) {
+          response += `- Primary keyword density: ${primaryPhrase.density} (ideal: 1-2%)\n`;
+        }
       } else {
         response += `No clear target keyword phrases detected.\n`;
       }
@@ -280,7 +327,7 @@ ${
         analysis.keywordAnalysis.singleWords.slice(0, 3).forEach((word, i) => {
           response += `${i + 1}. "${word.word}" (relevance score: ${
             word.score
-          })\n`;
+          }${word.density ? `, density: ${word.density}` : ''})\n`;
         });
       }
     } else {
@@ -293,17 +340,31 @@ ${
 
     if (analysis.issues && analysis.issues.length > 0) {
       // Group issues by severity
+      const criticalIssues = analysis.issues.filter(
+        (i) => i.severity === 'critical'
+      );
       const highIssues = analysis.issues.filter((i) => i.severity === 'high');
       const mediumIssues = analysis.issues.filter(
         (i) => i.severity === 'medium'
       );
       const lowIssues = analysis.issues.filter((i) => i.severity === 'low');
 
-      // Display high severity issues first
-      if (highIssues.length > 0) {
-        response += `### CRITICAL ISSUES - FIX IMMEDIATELY:\n`;
-        highIssues.forEach((issue, i) => {
+      // Display critical severity issues first
+      if (criticalIssues.length > 0) {
+        response += `### ⚠️ CRITICAL ISSUES - FIX IMMEDIATELY:\n`;
+        criticalIssues.forEach((issue, i) => {
           response += `${i + 1}. 🔴 ${issue.message} (Impact: ${
+            issue.impact
+          }/100)\n`;
+        });
+        response += `\n`;
+      }
+
+      // Display high severity issues
+      if (highIssues.length > 0) {
+        response += `### HIGH PRIORITY ISSUES - FIX SOON:\n`;
+        highIssues.forEach((issue, i) => {
+          response += `${i + 1}. 🟠 ${issue.message} (Impact: ${
             issue.impact
           }/100)\n`;
         });
@@ -312,9 +373,9 @@ ${
 
       // Display medium severity issues
       if (mediumIssues.length > 0) {
-        response += `### IMPORTANT ISSUES - ADDRESS SOON:\n`;
+        response += `### MEDIUM PRIORITY ISSUES - ADDRESS WHEN POSSIBLE:\n`;
         mediumIssues.forEach((issue, i) => {
-          response += `${i + 1}. 🟠 ${issue.message} (Impact: ${
+          response += `${i + 1}. 🟡 ${issue.message} (Impact: ${
             issue.impact
           }/100)\n`;
         });
@@ -325,7 +386,7 @@ ${
       if (lowIssues.length > 0) {
         response += `### MINOR ISSUES - CONSIDER FIXING:\n`;
         lowIssues.forEach((issue, i) => {
-          response += `${i + 1}. 🟡 ${issue.message} (Impact: ${
+          response += `${i + 1}. 🔵 ${issue.message} (Impact: ${
             issue.impact
           }/100)\n`;
         });
@@ -351,11 +412,14 @@ ${
 
     // Framework-specific notes
     if (analysis.isReactApp) {
-      response += `\n## REACT-SPECIFIC CONSIDERATIONS
-- This analysis is based on the static HTML. The rendered content may differ.
-- For React apps, consider using Next.js or Gatsby for better SEO.
-- Ensure meta tags are properly managed with React Helmet or similar.
-- Test your site with Google's Mobile-Friendly Test to see what search engines actually see.
+      response += `\n## REACT-SPECIFIC SEO CONSIDERATIONS
+- **This analysis is based ONLY on the initial HTML, not your rendered React app**
+- Client-side rendered React apps often have poor SEO because search engines may not execute JavaScript
+- For better SEO with React:
+  1. Use Next.js or Gatsby for server-side or static rendering
+  2. Use React Helmet to manage meta tags
+  3. Consider a pre-rendering service like Prerender.io
+  4. Test your site with Google's Mobile-Friendly Test to see what search engines actually see
 `;
     }
 

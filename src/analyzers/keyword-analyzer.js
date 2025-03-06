@@ -1,37 +1,24 @@
 // src/analyzers/keyword-analyzer.js
 import * as cheerio from 'cheerio';
-import natural from 'natural';
 
-// Initialize the stemmer and lemmatizer
-const stemmer = natural.PorterStemmer;
-const wordnet = new natural.WordNet();
+// Simple stemming function (very basic, but works for common cases)
+function simpleStem(word) {
+  word = word.toLowerCase();
 
-// Function to get the base form of a word (using stemming as fallback if lemmatization fails)
-async function normalizeWord(word) {
-  return new Promise((resolve) => {
-    // Try lemmatization first (more accurate but slower)
-    wordnet.lookup(word, (results) => {
-      if (results && results.length > 0 && results[0].lemma) {
-        resolve(results[0].lemma);
-      } else {
-        // Fall back to stemming if lemmatization fails
-        resolve(stemmer.stem(word));
-      }
+  // Handle common endings
+  if (word.endsWith('ing')) return word.slice(0, -3);
+  if (word.endsWith('ly')) return word.slice(0, -2);
+  if (word.endsWith('es')) return word.slice(0, -2);
+  if (word.endsWith('s')) return word.slice(0, -1);
+  if (word.endsWith('ed')) return word.slice(0, -2);
+  if (word.endsWith('er')) return word.slice(0, -2);
+  if (word.endsWith('ment')) return word.slice(0, -4);
+  if (word.endsWith('tion')) return word.slice(0, -4);
 
-      // Set a timeout in case WordNet hangs
-      setTimeout(() => {
-        resolve(stemmer.stem(word));
-      }, 50);
-    });
-  });
+  return word;
 }
 
-// Get stem immediately without async (for cases where we need synchronous processing)
-function stemWord(word) {
-  return stemmer.stem(word);
-}
-
-export async function detectTargetKeywords(html, title, metaDescription) {
+export function detectTargetKeywords(html, title, metaDescription) {
   const $ = cheerio.load(html);
   const bodyText = $('body').text().toLowerCase();
 
@@ -144,35 +131,34 @@ export async function detectTargetKeywords(html, title, metaDescription) {
 
   // Count word frequency in body text
   const wordCounts = {};
-  const normalizedWordMap = {}; // Maps normalized words back to their most common original form
+  const stemmedWordMap = {}; // Maps stemmed words to original forms
   const words = bodyText.split(/\s+/);
+  const totalWords = words.length;
 
-  // First pass: stem all words and count frequencies
-  for (let i = 0; i < words.length; i++) {
+  words.forEach((word) => {
     // Clean the word (remove punctuation, etc.)
-    const word = words[i].replace(/[^\w\s]/g, '').trim();
-
-    if (word && word.length > 3 && !commonWords.includes(word)) {
-      // Use stemming for the first pass (faster)
-      const stemmedWord = stemWord(word);
+    const cleanWord = word.replace(/[^\w\s]/g, '').trim();
+    if (cleanWord && cleanWord.length > 3 && !commonWords.includes(cleanWord)) {
+      // Get the stem of the word
+      const stemmed = simpleStem(cleanWord);
 
       // Count the stemmed word
-      wordCounts[stemmedWord] = (wordCounts[stemmedWord] || 0) + 1;
+      wordCounts[stemmed] = (wordCounts[stemmed] || 0) + 1;
 
-      // Keep track of the original forms
+      // Keep track of the original form (use the most frequent one)
       if (
-        !normalizedWordMap[stemmedWord] ||
-        words.filter((w) => stemWord(w) === stemmedWord).length >
-          words.filter((w) => w === normalizedWordMap[stemmedWord]).length
+        !stemmedWordMap[stemmed] ||
+        words.filter((w) => w === cleanWord).length >
+          words.filter((w) => w === stemmedWordMap[stemmed]).length
       ) {
-        normalizedWordMap[stemmedWord] = word;
+        stemmedWordMap[stemmed] = cleanWord;
       }
     }
-  }
+  });
 
   // Count 2-word phrases (potential keywords)
   const phraseCounts = {};
-  const normalizedPhraseMap = {}; // Maps normalized phrases back to their original form
+  const originalPhraseMap = {}; // Maps normalized phrases to original forms
 
   for (let i = 0; i < words.length - 1; i++) {
     const word1 = words[i].replace(/[^\w\s]/g, '').trim();
@@ -186,71 +172,70 @@ export async function detectTargetKeywords(html, title, metaDescription) {
       !commonWords.includes(word1) &&
       !commonWords.includes(word2)
     ) {
-      // Create the original phrase
-      const originalPhrase = `${word1} ${word2}`;
+      const phrase = `${word1} ${word2}`;
+      const normalizedPhrase = `${simpleStem(word1)} ${simpleStem(word2)}`;
 
-      // Stem both words for the normalized phrase
-      const stemmedWord1 = stemWord(word1);
-      const stemmedWord2 = stemWord(word2);
-      const normalizedPhrase = `${stemmedWord1} ${stemmedWord2}`;
-
-      // Count the normalized phrase
       phraseCounts[normalizedPhrase] =
         (phraseCounts[normalizedPhrase] || 0) + 1;
 
-      // Keep track of the original form (use the most frequent one)
-      if (
-        !normalizedPhraseMap[normalizedPhrase] ||
-        phraseCounts[normalizedPhrase] >
-          (phraseCounts[normalizedPhraseMap[normalizedPhrase]] || 0)
-      ) {
-        normalizedPhraseMap[normalizedPhrase] = originalPhrase;
+      // Keep track of the original form
+      if (!originalPhraseMap[normalizedPhrase]) {
+        originalPhraseMap[normalizedPhrase] = phrase;
       }
     }
   }
 
   // Prioritize words that appear in title, meta description, and h1
-  const scoredWords = Object.keys(wordCounts).map((stemmedWord) => {
-    let score = wordCounts[stemmedWord];
-    const originalWord = normalizedWordMap[stemmedWord];
+  const scoredWords = Object.keys(wordCounts).map((stemmed) => {
+    let score = wordCounts[stemmed];
+    const originalWord = stemmedWordMap[stemmed];
 
     // Boost score if word appears in important elements
-    // We need to check if any variation of the word appears in these elements
-    const inTitle = titleWords.some((w) => stemWord(w) === stemmedWord);
-    const inMeta = metaWords.some((w) => stemWord(w) === stemmedWord);
-    const inH1 = h1Words.some((w) => stemWord(w) === stemmedWord);
+    const stemmedImportantWords = importantWords.map((w) => simpleStem(w));
+    if (stemmedImportantWords.includes(stemmed)) {
+      score += 10;
+    }
 
-    if (inTitle) score += 10;
-    if (inMeta) score += 5;
-    if (inH1) score += 8;
+    if (titleWords.map((w) => simpleStem(w)).includes(stemmed)) score += 10;
+    if (metaWords.map((w) => simpleStem(w)).includes(stemmed)) score += 5;
+    if (h1Words.map((w) => simpleStem(w)).includes(stemmed)) score += 8;
 
-    return { word: originalWord, stem: stemmedWord, score };
+    // Calculate density
+    const density = ((wordCounts[stemmed] / totalWords) * 100).toFixed(2) + '%';
+
+    return { word: originalWord, score, density };
   });
 
   // Prioritize phrases that appear in title, meta description, and h1
   const scoredPhrases = Object.keys(phraseCounts).map((normalizedPhrase) => {
     let score = phraseCounts[normalizedPhrase] * 1.5; // Phrases are more valuable than single words
-    const originalPhrase = normalizedPhraseMap[normalizedPhrase];
+    const originalPhrase = originalPhraseMap[normalizedPhrase];
+    const phraseWords = normalizedPhrase.split(' ');
 
-    // Check if any variation of the phrase appears in important elements
-    const phraseInTitle =
-      title && stemWord(title.toLowerCase()).includes(normalizedPhrase);
-    const phraseInMeta =
+    // Boost score if phrase appears in important elements
+    if (title && phraseWords.every((pw) => title.toLowerCase().includes(pw)))
+      score += 15;
+    if (
       metaDescription &&
-      stemWord(metaDescription.toLowerCase()).includes(normalizedPhrase);
-    let phraseInH1 = false;
+      phraseWords.every((pw) => metaDescription.toLowerCase().includes(pw))
+    )
+      score += 10;
 
+    let inH1 = false;
     $('h1').each((i, el) => {
-      if (stemWord($(el).text().toLowerCase()).includes(normalizedPhrase)) {
-        phraseInH1 = true;
+      const h1Text = $(el).text().toLowerCase();
+      if (phraseWords.every((pw) => h1Text.includes(pw))) {
+        inH1 = true;
       }
     });
+    if (inH1) score += 12;
 
-    if (phraseInTitle) score += 15;
-    if (phraseInMeta) score += 10;
-    if (phraseInH1) score += 12;
+    // Calculate density
+    const density =
+      ((phraseCounts[normalizedPhrase] / (totalWords - 1)) * 100).toFixed(2) +
+      '%';
 
-    return { phrase: originalPhrase, normalizedPhrase, score };
+    return { phrase: originalPhrase, score, density };
   });
 
   // Sort by score and take top results
@@ -259,25 +244,8 @@ export async function detectTargetKeywords(html, title, metaDescription) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 
-  // Calculate keyword density for top words and phrases
-  const totalWords = words.length;
-
-  const topWordsWithDensity = topWords.map((word) => ({
-    ...word,
-    density: ((wordCounts[word.stem] / totalWords) * 100).toFixed(2) + '%',
-  }));
-
-  const topPhrasesWithDensity = topPhrases.map((phrase) => ({
-    ...phrase,
-    density:
-      (
-        (phraseCounts[phrase.normalizedPhrase] / (totalWords - 1)) *
-        100
-      ).toFixed(2) + '%',
-  }));
-
   return {
-    singleWords: topWordsWithDensity,
-    phrases: topPhrasesWithDensity,
+    singleWords: topWords,
+    phrases: topPhrases,
   };
 }
