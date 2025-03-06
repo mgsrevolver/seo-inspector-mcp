@@ -1,100 +1,93 @@
-// seo-mcp-server.js - Main MCP server file
-const express = require('express');
-const cors = require('cors');
-const fs = require('fs').promises;
-const path = require('path');
-const cheerio = require('cheerio');
+#!/usr/bin/env node
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from '@modelcontextprotocol/sdk/types.js';
+import * as cheerio from 'cheerio';
 
-const app = express();
-const port = 8767;
+// Define the SEO tool
+const SEO_ANALYZER_TOOL = {
+  name: 'analyzeSEO',
+  description: 'Analyze HTML content for SEO issues',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      html: {
+        type: 'string',
+        description: 'HTML content to analyze',
+      },
+      url: {
+        type: 'string',
+        description: 'URL or identifier for the HTML content',
+      },
+    },
+    required: ['html'],
+  },
+};
 
-app.use(cors());
-app.use(express.json());
-
-// MCP SSE endpoint
-app.get('/sse', (req, res) => {
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache');
-  res.setHeader('Connection', 'keep-alive');
-
-  // Send initial message
-  res.write('data: Connected to SEO Inspector MCP\n\n');
-
-  // Keep connection alive
-  const interval = setInterval(() => {
-    res.write(': ping\n\n');
-  }, 30000);
-
-  req.on('close', () => {
-    clearInterval(interval);
-    res.end();
-  });
-});
-
-// Analyze HTML files in a directory
-app.post('/analyze-codebase', async (req, res) => {
-  const { directoryPath } = req.body;
-
-  try {
-    const htmlFiles = await findHtmlFiles(directoryPath);
-    const results = await Promise.all(
-      htmlFiles.map((file) => analyzeHtmlFile(file))
-    );
-
-    res.json({
-      totalFiles: htmlFiles.length,
-      results,
-    });
-  } catch (error) {
-    console.error('Error analyzing codebase:', error);
-    res.status(500).json({ error: error.message });
+// Create the server
+const server = new Server(
+  {
+    name: 'seo-inspector-server',
+    version: '1.0.0',
+  },
+  {
+    capabilities: {
+      tools: {},
+    },
   }
-});
+);
 
-// Analyze a specific HTML string
-app.post('/analyze-html', (req, res) => {
-  const { html, url } = req.body;
+// Handle tool listing requests
+server.setRequestHandler(ListToolsRequestSchema, async () => ({
+  tools: [SEO_ANALYZER_TOOL],
+}));
 
-  try {
-    const analysis = analyzeHtml(html, url || 'example.com');
-    res.json(analysis);
-  } catch (error) {
-    console.error('Error analyzing HTML:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// Handle tool call requests
+server.setRequestHandler(CallToolRequestSchema, async (request) => {
+  if (request.params.name === 'analyzeSEO') {
+    try {
+      const result = analyzeHtml(
+        request.params.arguments.html,
+        request.params.arguments.url || 'example.com'
+      );
 
-async function findHtmlFiles(directory) {
-  const htmlFiles = [];
-
-  async function traverse(dir) {
-    const files = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const file of files) {
-      const filePath = path.join(dir, file.name);
-
-      if (file.isDirectory()) {
-        await traverse(filePath);
-      } else if (file.name.endsWith('.html') || file.name.endsWith('.htm')) {
-        htmlFiles.push(filePath);
-      }
+      return {
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify(result, null, 2),
+          },
+        ],
+      };
+    } catch (error) {
+      console.error('Error analyzing SEO:', error);
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Error analyzing SEO: ${error.message}`,
+          },
+        ],
+        isError: true,
+      };
     }
   }
 
-  await traverse(directory);
-  return htmlFiles;
-}
-
-async function analyzeHtmlFile(filePath) {
-  const content = await fs.readFile(filePath, 'utf8');
-  const analysis = analyzeHtml(content, path.basename(filePath));
-
   return {
-    filePath,
-    ...analysis,
+    content: [
+      {
+        type: 'text',
+        text: `Unknown tool: ${request.params.name}`,
+      },
+    ],
+    isError: true,
   };
-}
+});
 
+// Function to analyze HTML
 function analyzeHtml(html, pageIdentifier) {
   const $ = cheerio.load(html);
   const issues = [];
@@ -190,6 +183,14 @@ function analyzeHtml(html, pageIdentifier) {
   };
 }
 
-app.listen(port, () => {
-  console.log(`SEO Inspector MCP server running at http://localhost:${port}`);
+// Start the server
+async function runServer() {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  console.error('SEO Inspector MCP Server running on stdio');
+}
+
+runServer().catch((error) => {
+  console.error('Fatal error running server:', error);
+  process.exit(1);
 });

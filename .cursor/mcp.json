@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "seo-inspector": {
+      "url": "http://localhost:8768/sse"
+    }
+  }
+}
