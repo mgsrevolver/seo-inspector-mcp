@@ -274,61 +274,57 @@ ${
 - Canonical URL: ${analysis.hasCanonical ? 'Present ✓' : 'Missing ✗'}
 - Mobile Viewport: ${analysis.hasViewport ? 'Present ✓' : 'Missing ✗'}
 
-## TARGET KEYWORD ANALYSIS
-`;
+## TARGET KEYWORD ANALYSIS\n`;
 
-    // Add keyword analysis
     if (analysis.keywordAnalysis) {
-      // Handle phrases (multi-word keywords)
+      // Always show detected keywords first
       if (
-        analysis.keywordAnalysis.phrases &&
-        analysis.keywordAnalysis.phrases.length > 0
+        analysis.keywordAnalysis.keywordSummary &&
+        analysis.keywordAnalysis.keywordSummary.primaryPhrase
       ) {
-        const primaryPhrase = analysis.keywordAnalysis.phrases[0];
-        response += `Primary target keyword phrase appears to be: "${primaryPhrase.phrase}" (relevance score: ${primaryPhrase.score})\n`;
+        response += `Primary target keyword phrase appears to be: "${analysis.keywordAnalysis.keywordSummary.primaryPhrase}"\n`;
 
-        if (analysis.keywordAnalysis.phrases.length > 1) {
-          response += `Secondary keyword phrases: ${analysis.keywordAnalysis.phrases
-            .slice(1, 3)
-            .map((p) => `"${p.phrase}"`)
+        if (
+          analysis.keywordAnalysis.keywordSummary.secondaryPhrases &&
+          analysis.keywordAnalysis.keywordSummary.secondaryPhrases.length > 0
+        ) {
+          response += `Secondary keyword phrases: ${analysis.keywordAnalysis.keywordSummary.secondaryPhrases
+            .map((p) => `"${p}"`)
             .join(', ')}\n`;
         }
 
-        // Check if primary phrase is in title and description
-        const phraseInTitle =
-          analysis.title &&
-          analysis.title.toLowerCase().includes(primaryPhrase.phrase);
-        const phraseInDescription =
-          analysis.metaDescription &&
-          analysis.metaDescription.toLowerCase().includes(primaryPhrase.phrase);
+        response += `\nTop single-word keywords: ${analysis.keywordAnalysis.keywordSummary.topSingleWords
+          .map((w) => `"${w}"`)
+          .join(', ')}\n`;
 
-        response += `\nKeyword Phrase Optimization:\n`;
-        response += `- Title includes primary keyword phrase: ${
-          phraseInTitle ? '✅ Yes' : '❌ No'
-        }\n`;
-        response += `- Meta description includes primary keyword phrase: ${
-          phraseInDescription ? '✅ Yes' : '❌ No'
-        }\n`;
+        // Now focus on placement rather than density
+        response += `\nKeyword Placement Analysis:\n`;
 
-        // Add keyword density
-        if (primaryPhrase.density) {
-          response += `- Primary keyword density: ${primaryPhrase.density} (ideal: 1-2%)\n`;
+        const placement = analysis.keywordAnalysis.placementAnalysis;
+        if (placement) {
+          response += `- Primary keyword "${
+            placement.primaryPhrase
+          }" in title: ${placement.inTitle ? '✅ Yes' : '❌ No'}\n`;
+          response += `- Primary keyword in meta description: ${
+            placement.inMetaDescription ? '✅ Yes' : '❌ No'
+          }\n`;
+          response += `- Primary keyword in H1 heading: ${
+            placement.inH1 ? '✅ Yes' : '❌ No'
+          }\n`;
+          response += `- Primary keyword in H2 headings: ${
+            placement.inH2 ? '✅ Yes' : '❌ No'
+          }\n`;
+
+          if (placement.missingFrom && placement.missingFrom.length > 0) {
+            response += `\n⚠️ Your primary keyword is missing from: ${placement.missingFrom.join(
+              ', '
+            )}\n`;
+          } else {
+            response += `\n✅ Great job! Your primary keyword is well-placed in all important elements.\n`;
+          }
         }
       } else {
         response += `No clear target keyword phrases detected.\n`;
-      }
-
-      // Handle single words
-      if (
-        analysis.keywordAnalysis.singleWords &&
-        analysis.keywordAnalysis.singleWords.length > 0
-      ) {
-        response += `\nTop single-word keywords:\n`;
-        analysis.keywordAnalysis.singleWords.slice(0, 3).forEach((word, i) => {
-          response += `${i + 1}. "${word.word}" (relevance score: ${
-            word.score
-          }${word.density ? `, density: ${word.density}` : ''})\n`;
-        });
       }
     } else {
       response += `No keyword analysis available. Consider adding more specific, relevant keywords to your content.\n`;

@@ -126,8 +126,14 @@ export function detectTargetKeywords(html, title, metaDescription) {
     h1Words.push(...$(el).text().toLowerCase().split(/\s+/));
   });
 
+  // Add h2 words collection
+  const h2Words = [];
+  $('h2').each((i, el) => {
+    h2Words.push(...$(el).text().toLowerCase().split(/\s+/));
+  });
+
   // Combine all important words
-  const importantWords = [...titleWords, ...metaWords, ...h1Words];
+  const importantWords = [...titleWords, ...metaWords, ...h1Words, ...h2Words];
 
   // Count word frequency in body text
   const wordCounts = {};
@@ -199,11 +205,20 @@ export function detectTargetKeywords(html, title, metaDescription) {
     if (titleWords.map((w) => simpleStem(w)).includes(stemmed)) score += 10;
     if (metaWords.map((w) => simpleStem(w)).includes(stemmed)) score += 5;
     if (h1Words.map((w) => simpleStem(w)).includes(stemmed)) score += 8;
+    if (h2Words.map((w) => simpleStem(w)).includes(stemmed)) score += 6;
 
-    // Calculate density
-    const density = ((wordCounts[stemmed] / totalWords) * 100).toFixed(2) + '%';
+    // Calculate density (for analysis only, not for recommendations)
+    const density = ((wordCounts[stemmed] / totalWords) * 100).toFixed(2);
 
-    return { word: originalWord, score, density };
+    return {
+      word: originalWord,
+      score,
+      density,
+      inTitle: titleWords.map((w) => simpleStem(w)).includes(stemmed),
+      inMetaDescription: metaWords.map((w) => simpleStem(w)).includes(stemmed),
+      inH1: h1Words.map((w) => simpleStem(w)).includes(stemmed),
+      inH2: h2Words.map((w) => simpleStem(w)).includes(stemmed),
+    };
   });
 
   // Prioritize phrases that appear in title, meta description, and h1
@@ -213,13 +228,14 @@ export function detectTargetKeywords(html, title, metaDescription) {
     const phraseWords = normalizedPhrase.split(' ');
 
     // Boost score if phrase appears in important elements
-    if (title && phraseWords.every((pw) => title.toLowerCase().includes(pw)))
-      score += 15;
-    if (
+    const inTitle =
+      title && phraseWords.every((pw) => title.toLowerCase().includes(pw));
+    const inMetaDescription =
       metaDescription &&
-      phraseWords.every((pw) => metaDescription.toLowerCase().includes(pw))
-    )
-      score += 10;
+      phraseWords.every((pw) => metaDescription.toLowerCase().includes(pw));
+
+    if (inTitle) score += 15;
+    if (inMetaDescription) score += 10;
 
     let inH1 = false;
     $('h1').each((i, el) => {
@@ -228,14 +244,33 @@ export function detectTargetKeywords(html, title, metaDescription) {
         inH1 = true;
       }
     });
+
+    let inH2 = false;
+    $('h2').each((i, el) => {
+      const h2Text = $(el).text().toLowerCase();
+      if (phraseWords.every((pw) => h2Text.includes(pw))) {
+        inH2 = true;
+      }
+    });
+
     if (inH1) score += 12;
+    if (inH2) score += 8;
 
-    // Calculate density
-    const density =
-      ((phraseCounts[normalizedPhrase] / (totalWords - 1)) * 100).toFixed(2) +
-      '%';
+    // Calculate density (for analysis only, not for recommendations)
+    const density = (
+      (phraseCounts[normalizedPhrase] / (totalWords - 1)) *
+      100
+    ).toFixed(2);
 
-    return { phrase: originalPhrase, score, density };
+    return {
+      phrase: originalPhrase,
+      score,
+      density,
+      inTitle,
+      inMetaDescription,
+      inH1,
+      inH2,
+    };
   });
 
   // Sort by score and take top results
@@ -244,8 +279,34 @@ export function detectTargetKeywords(html, title, metaDescription) {
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 
+  // Add placement analysis for the top phrase
+  const placementAnalysis =
+    topPhrases.length > 0
+      ? {
+          primaryPhrase: topPhrases[0].phrase,
+          inTitle: topPhrases[0].inTitle,
+          inMetaDescription: topPhrases[0].inMetaDescription,
+          inH1: topPhrases[0].inH1,
+          inH2: topPhrases[0].inH2,
+          missingFrom: [],
+        }
+      : null;
+
+  if (!placementAnalysis.inTitle) placementAnalysis.missingFrom.push('title');
+  if (!placementAnalysis.inMetaDescription)
+    placementAnalysis.missingFrom.push('meta description');
+  if (!placementAnalysis.inH1) placementAnalysis.missingFrom.push('H1 heading');
+  if (!placementAnalysis.inH2)
+    placementAnalysis.missingFrom.push('H2 headings');
+
   return {
     singleWords: topWords,
     phrases: topPhrases,
+    placementAnalysis,
+    keywordSummary: {
+      primaryPhrase: topPhrases.length > 0 ? topPhrases[0].phrase : null,
+      secondaryPhrases: topPhrases.slice(1, 3).map((p) => p.phrase),
+      topSingleWords: topWords.slice(0, 3).map((w) => w.word),
+    },
   };
 }
