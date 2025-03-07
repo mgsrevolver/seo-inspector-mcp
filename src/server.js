@@ -448,8 +448,33 @@ ${
 // Start the server
 async function runServer() {
   const transport = new StdioServerTransport();
-  await server.connect(transport);
-  console.error('SEO Inspector MCP Server running on stdio');
+
+  try {
+    await server.connect(transport);
+    console.error('SEO Inspector MCP Server running on stdio');
+
+    // Keep the process alive without using event listeners
+    process.stdin.resume();
+
+    // Handle proper shutdown
+    process.on('SIGINT', () => {
+      console.error('Server shutting down...');
+      process.exit(0);
+    });
+
+    process.on('SIGTERM', () => {
+      console.error('Server shutting down...');
+      process.exit(0);
+    });
+
+    // Simple heartbeat log (optional)
+    setInterval(() => {
+      console.error('Server heartbeat: still running');
+    }, 60000); // Log every minute
+  } catch (error) {
+    console.error('Error connecting transport:', error);
+    process.exit(1);
+  }
 }
 
 runServer().catch((error) => {
